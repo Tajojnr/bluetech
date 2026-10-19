@@ -3,49 +3,68 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, useScroll, useTransform } from 'framer-motion';
 
-const TOTAL_FRAMES = 243; 
+// Optimized frame count
+const TOTAL_FRAMES = 80; 
 
 export default function CinematicScroll() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [images, setImages] = useState<HTMLImageElement[]>([]);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [loadProgress, setLoadProgress] = useState(0);
+  const imagesRef = useRef<HTMLImageElement[]>([]);
+  const [firstFrameLoaded, setFirstFrameLoaded] = useState(false);
 
   const { scrollYProgress } = useScroll({
     target: containerRef,
     offset: ["start start", "end end"]
   });
 
+  // 1. INSTANT LOAD: Load Frame 1 immediately
   useEffect(() => {
-    const loadedImages: HTMLImageElement[] = [];
-    let loadedCount = 0;
+    const frame1 = new Image();
+    frame1.src = '/frames/frame_0001.jpg';
+    frame1.onload = () => {
+      imagesRef.current[0] = frame1;
+      setFirstFrameLoaded(true);
+      
+      // Draw first frame immediately
+      if (canvasRef.current) {
+        const canvas = canvasRef.current;
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) drawImageToCanvas(ctx, canvas, frame1);
+      }
+    };
 
-    for (let i = 1; i <= TOTAL_FRAMES; i++) {
+    // 2. BACKGROUND STREAM: Load the remaining 79 frames progressively
+    for (let i = 2; i <= TOTAL_FRAMES; i++) {
       const img = new Image();
       const frameNumber = i.toString().padStart(4, '0');
       img.src = `/frames/frame_${frameNumber}.jpg`;
-      
       img.onload = () => {
-        loadedCount++;
-        setLoadProgress(Math.round((loadedCount / TOTAL_FRAMES) * 100));
-        if (loadedCount === TOTAL_FRAMES) {
-          setIsLoaded(true);
-        }
+        imagesRef.current[i - 1] = img;
       };
-
-      img.onerror = () => {
-        loadedCount++;
-        if (loadedCount === TOTAL_FRAMES) setIsLoaded(true);
-      };
-
-      loadedImages.push(img);
     }
-    setImages(loadedImages);
   }, []);
 
+  // Canvas drawing helper function
+  const drawImageToCanvas = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, img: HTMLImageElement) => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const hRatio = canvas.width / img.width;
+    const vRatio = canvas.height / img.height;
+    const ratio = Math.max(hRatio, vRatio);
+    const centerShift_x = (canvas.width - img.width * ratio) / 2;
+    const centerShift_y = (canvas.height - img.height * ratio) / 2;
+
+    ctx.drawImage(
+      img,
+      0, 0, img.width, img.height,
+      centerShift_x, centerShift_y, img.width * ratio, img.height * ratio
+    );
+  };
+
+  // 3. Scroll Listener for smooth frame scrubbing
   useEffect(() => {
-    if (!isLoaded || !canvasRef.current || images.length === 0) return;
+    if (!canvasRef.current) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -54,8 +73,10 @@ export default function CinematicScroll() {
     const handleResize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
+      const firstImg = imagesRef.current[0];
+      if (firstImg) drawImageToCanvas(ctx, canvas, firstImg);
     };
-    handleResize();
+
     window.addEventListener('resize', handleResize);
 
     const render = () => {
@@ -64,41 +85,32 @@ export default function CinematicScroll() {
         Math.floor(scrollYProgress.get() * TOTAL_FRAMES)
       );
 
-      const currentImage = images[frameIndex];
+      // Grab current frame, or fallback to nearest loaded frame
+      let imgToDraw = imagesRef.current[frameIndex];
+      if (!imgToDraw) {
+        // Fallback to nearest previous loaded frame so canvas never goes blank
+        for (let j = frameIndex; j >= 0; j--) {
+          if (imagesRef.current[j]) {
+            imgToDraw = imagesRef.current[j];
+            break;
+          }
+        }
+      }
 
-      if (currentImage && currentImage.complete) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        const hRatio = canvas.width / currentImage.width;
-        const vRatio = canvas.height / currentImage.height;
-        const ratio = Math.max(hRatio, vRatio);
-        const centerShift_x = (canvas.width - currentImage.width * ratio) / 2;
-        const centerShift_y = (canvas.height - currentImage.height * ratio) / 2;
-
-        ctx.drawImage(
-          currentImage,
-          0,
-          0,
-          currentImage.width,
-          currentImage.height,
-          centerShift_x,
-          centerShift_y,
-          currentImage.width * ratio,
-          currentImage.height * ratio
-        );
+      if (imgToDraw && imgToDraw.complete) {
+        drawImageToCanvas(ctx, canvas, imgToDraw);
       }
     };
 
     const unsubscribe = scrollYProgress.on("change", render);
-    render();
 
     return () => {
       unsubscribe();
       window.removeEventListener('resize', handleResize);
     };
-  }, [isLoaded, scrollYProgress, images]);
+  }, [scrollYProgress]);
 
-  // Text animations mapped across the 243 frames
+  // Text Animations mapped to scroll percentage
   const opacity1 = useTransform(scrollYProgress, [0, 0.15, 0.3], [1, 1, 0]);
   const y1 = useTransform(scrollYProgress, [0, 0.3], [0, -30]);
 
@@ -109,7 +121,7 @@ export default function CinematicScroll() {
   const y3 = useTransform(scrollYProgress, [0.7, 0.85, 1], [30, 0, 0]);
 
   return (
-    <div ref={containerRef} className="relative w-full bg-zinc-950" style={{ height: '400vh' }}>
+    <div ref={containerRef} className="relative w-full bg-zinc-950" style={{ height: '350vh' }}>
       
       {/* LOCKED VIEWPORT CONTAINER */}
       <div 
@@ -117,10 +129,10 @@ export default function CinematicScroll() {
         style={{ position: 'sticky', top: 0, height: '100vh', zIndex: 10 }}
       >
         
-        {!isLoaded && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center z-50 bg-zinc-950 text-blue-500 font-mono text-sm tracking-widest gap-3">
-            <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-            <span>LOADING EXPERIENCE ({loadProgress}%)</span>
+        {/* Subtle background pulse while initial frame mounts */}
+        {!firstFrameLoaded && (
+          <div className="absolute inset-0 bg-zinc-950 flex items-center justify-center text-blue-500 font-mono text-xs tracking-widest animate-pulse">
+            LOADING EXPERIENCE...
           </div>
         )}
 
